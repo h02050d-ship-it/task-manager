@@ -314,18 +314,63 @@ const SEED=[
   {cat:"yearly",mon:3,md:31,name:"棚卸(工場)",who:"楓",note:"在庫も集計"},
 ];
 
+//======== バックエンド設定 ========
+// GASのウェブアプリURLを入れると「全員で共有」モードになる（空＝この端末のみのデモ）
+const API_URL    = "";   // ← GASデプロイ後、ここにウェブアプリURLを貼る
+const SHARED_KEY = "";   // GAS側でSHARED_KEYを設定した時だけ同じ値を入れる
+
 //======== 状態 ========
 let DATA=load();
 let tab="today", wfilter=(localStorage.getItem("hz_me")||"大樹"), editId=null, editCat="daily", editWho="大樹";
 
 function load(){
-  try{const s=localStorage.getItem("hz_tasks_v2");if(s)return JSON.parse(s);}catch(e){}
-  const seeded=SEED.map((t,i)=>({id:"t"+i,done:false,...t}));
-  localStorage.setItem("hz_tasks_v2",JSON.stringify(seeded));
-  return seeded;
+  let arr=null;
+  try{const s=localStorage.getItem("hz_tasks_v2");if(s)arr=JSON.parse(s);}catch(e){}
+  if(!arr)arr=SEED.map((t,i)=>({id:"t"+i,doneDate:"",...t}));
+  // 旧スキーマ(done:真偽)からの移行＝既存の入力を失わない
+  const tISO=(()=>{const d=new Date(),z=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;})();
+  arr.forEach(t=>{ if(t.doneDate===undefined)t.doneDate=t.done?tISO:""; delete t.done; });
+  localStorage.setItem("hz_tasks_v2",JSON.stringify(arr));
+  return arr;
 }
 function save(){localStorage.setItem("hz_tasks_v2",JSON.stringify(DATA));}
 function uid(){return "t"+Date.now()+Math.floor(Math.random()*1000);}
+
+//======== 「済」周期判定（GASと同一ルール：日次=その日／月次=その月／年次=その年）========
+function isoToday(){const z=n=>String(n).padStart(2,"0");return `${tyear}-${z(tmon)}-${z(today)}`;}
+function isDoneCycle(t){
+  if(!t.doneDate)return false;
+  const d=new Date(t.doneDate); if(isNaN(d))return false;
+  if(t.cat==="daily"||t.cat==="factory")return d.getFullYear()===tyear&&d.getMonth()+1===tmon&&d.getDate()===today;
+  if(t.cat==="monthly")return d.getFullYear()===tyear&&d.getMonth()+1===tmon;
+  if(t.cat==="yearly")return d.getFullYear()===tyear;
+  return false;
+}
+function toggleDone(t){const v=!isDoneCycle(t);t.doneDate=v?isoToday():"";save();apiPost({action:"toggle",id:t.id,done:v});return v;}
+
+//======== サーバ同期（API_URL設定時のみ動作。未設定なら何もしない）========
+function normalizeServerTask(t){return {
+  id:String(t.id),cat:t.cat,name:t.name,who:t.who,time:t.time||"",
+  day:(t.day===""||t.day==null)?undefined:Number(t.day),
+  mon:(t.mon===""||t.mon==null)?undefined:Number(t.mon),
+  md:(t.md===""||t.md==null)?undefined:Number(t.md),
+  note:t.note||"",doneDate:t.doneDate?String(t.doneDate):""};}
+async function syncFromServer(){
+  if(!API_URL)return;
+  try{const r=await fetch(API_URL,{method:"GET"});const j=await r.json();
+    if(j&&j.ok&&Array.isArray(j.tasks)){DATA=j.tasks.map(normalizeServerTask);save();render();}
+  }catch(e){}
+}
+function apiPost(payload){
+  if(!API_URL)return; if(SHARED_KEY)payload.key=SHARED_KEY;
+  fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)}).catch(()=>{});
+}
+async function pushAndRefresh(payload){
+  if(!API_URL)return; if(SHARED_KEY)payload.key=SHARED_KEY;
+  try{const r=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
+    const j=await r.json(); if(j&&j.ok&&Array.isArray(j.tasks)){DATA=j.tasks.map(normalizeServerTask);save();render();}
+  }catch(e){}
+}
 
 //======== 日付 ========
 const NOW=new Date();
@@ -349,8 +394,8 @@ const byWho=arr=>wfilter?arr.filter(t=>t.who===wfilter):arr;
 const esc=s=>(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 function rowHTML(t,pills){
-  return `<div class="row ${t.done?'done':''}" data-id="${t.id}" style="box-shadow:inset 4px 0 0 ${colorOf(t.who).bar}">
-    <div class="cb ${t.done?'on':''}" data-act="toggle">
+  return `<div class="row ${isDoneCycle(t)?'done':''}" data-id="${t.id}" style="box-shadow:inset 4px 0 0 ${colorOf(t.who).bar}">
+    <div class="cb ${isDoneCycle(t)?'on':''}" data-act="toggle">
       <svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="meta" data-act="edit">
@@ -378,9 +423,9 @@ function listCard(items,pillFn){
 function viewToday(){
   let h="";
   // 1) 未処理（期日超過）：完了していない & 期日が過ぎたもの
-  const overM=byWho(DATA.filter(t=>t.cat==="monthly"&&!t.done&&t.day<today))
+  const overM=byWho(DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day<today))
     .map(t=>({t,over:today-t.day,label:`毎月${t.day}日`}));
-  const overY=byWho(DATA.filter(t=>t.cat==="yearly"&&!t.done))
+  const overY=byWho(DATA.filter(t=>t.cat==="yearly"&&!isDoneCycle(t)))
     .map(t=>({t,d:daysUntilMD(t.mon,t.md)})).filter(o=>o.d<0)
     .map(o=>({t:o.t,over:-o.d,label:mdStr(o.t)}));
   const over=[...overM,...overY].sort((a,b)=>b.over-a.over);  // 超過日が長い順
@@ -401,9 +446,9 @@ function viewToday(){
     return whoPill(t)+`<span class="pill due">${mdStr(t)}・本日</span>`;});
 
   // 3) 次に来るタスク（近い順）：これからの未完了の月次・年次
-  const upM=byWho(DATA.filter(t=>t.cat==="monthly"&&!t.done&&t.day>today))
+  const upM=byWho(DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day>today))
     .map(t=>({t,d:t.day-today,label:`毎月${t.day}日`}));
-  const upY=byWho(DATA.filter(t=>t.cat==="yearly"&&!t.done))
+  const upY=byWho(DATA.filter(t=>t.cat==="yearly"&&!isDoneCycle(t)))
     .map(t=>({t,d:daysUntilMD(t.mon,t.md)})).filter(o=>o.d>0)
     .map(o=>({t:o.t,d:o.d,label:mdStr(o.t)}));
   const up=[...upM,...upY].sort((a,b)=>a.d-b.d);
@@ -455,7 +500,7 @@ const ALERT_DAYS=7; // 年次の事前アラート日数（後で変更可）
 //======== 右サイド：他メンバーの注意タスク ========
 function attentionItems(who,nearDays){
   const arr=[];
-  DATA.filter(t=>t.who===who&&!t.done).forEach(t=>{
+  DATA.filter(t=>t.who===who&&!isDoneCycle(t)).forEach(t=>{
     if(t.cat==="monthly"){const d=t.day-today; if(d<=nearDays)arr.push({t,d,label:`毎月${t.day}日`});}
     else if(t.cat==="yearly"){const d=daysUntilMD(t.mon,t.md); if(d<=nearDays)arr.push({t,d,label:mdStr(t)});}
   });
@@ -474,7 +519,7 @@ function sideHTML(){
       const over=o.d<0;
       const txt=over?`${o.label}・${-o.d}日超過`:(o.d===0?`${o.label}・本日`:`${o.label}・あと${o.d}日`);
       body+=`<div class="s-row" data-id="${o.t.id}">
-        <div class="cb sm ${o.t.done?'on':''}" data-act="toggle"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="cb sm ${isDoneCycle(o.t)?'on':''}" data-act="toggle"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
         <div class="s-name" data-act="edit">${esc(o.t.name)}</div>
         <span class="pill ${over?'over':'due'}">${txt}</span></div>`;
     });
@@ -500,7 +545,7 @@ function render(){
   document.getElementById("side").innerHTML=sideHTML();
   // 進捗（本日分）
   const todayAll=DATA.filter(t=>t.cat==="daily"||(t.cat==="monthly"&&t.day===today));
-  const done=todayAll.filter(t=>t.done).length;
+  const done=todayAll.filter(t=>isDoneCycle(t)).length;
   document.getElementById("bar").style.width=todayAll.length?`${done/todayAll.length*100}%`:"0";
   document.getElementById("progtxt").textContent=`本日 ${done}/${todayAll.length}`;
   // 本体
@@ -520,7 +565,7 @@ document.getElementById("view").addEventListener("click",e=>{
   const row=e.target.closest(".row");if(!row)return;
   const id=row.dataset.id,act=e.target.closest("[data-act]")?.dataset.act;
   const t=DATA.find(x=>x.id===id);if(!t)return;
-  if(act==="toggle"){t.done=!t.done;save();render();toast(t.done?"完了にしました":"未完了に戻しました");}
+  if(act==="toggle"){const v=toggleDone(t);render();toast(v?"完了にしました":"未完了に戻しました");}
   else if(act==="edit"){openEditor(t);}
 });
 // 右サイド（他メンバー）からも完了・編集できる
@@ -528,7 +573,7 @@ document.getElementById("side").addEventListener("click",e=>{
   const row=e.target.closest(".s-row");if(!row)return;
   const t=DATA.find(x=>x.id===row.dataset.id);if(!t)return;
   const act=e.target.closest("[data-act]")?.dataset.act;
-  if(act==="toggle"){t.done=!t.done;save();render();toast(t.done?"処理済みにしました":"未完了に戻しました");}
+  if(act==="toggle"){const v=toggleDone(t);render();toast(v?"処理済みにしました":"未完了に戻しました");}
   else if(act==="edit"){openEditor(t);}
 });
 
@@ -582,14 +627,22 @@ document.getElementById("btn-save").addEventListener("click",()=>{
   if(f.includes("mon"))o.mon=Math.min(12,Math.max(1,+document.getElementById("f-mon").value||1));
   if(f.includes("md"))o.md=Math.min(31,Math.max(1,+document.getElementById("f-mdday").value||1));
   const note=document.getElementById("f-note").value.trim(); if(note)o.note=note;
-  if(editId){const t=DATA.find(x=>x.id===editId);Object.keys(t).forEach(k=>{if(!["id","done"].includes(k))delete t[k];});Object.assign(t,o);}
-  else{DATA.push({id:uid(),done:false,...o});}
-  save();closeEditor();render();toast(editId?"保存しました":"追加しました");
+  if(editId){
+    const t=DATA.find(x=>x.id===editId);
+    Object.keys(t).forEach(k=>{if(!["id","doneDate"].includes(k))delete t[k];});
+    Object.assign(t,o);save();closeEditor();render();toast("保存しました");
+    pushAndRefresh({action:"update",id:editId,task:o});
+  }else{
+    DATA.push({id:uid(),doneDate:"",...o});save();closeEditor();render();toast("追加しました");
+    pushAndRefresh({action:"add",task:o});
+  }
 });
 document.getElementById("btn-del").addEventListener("click",()=>{
   if(!editId)return;
   if(!confirm("この作業を削除しますか？"))return;
-  DATA=DATA.filter(t=>t.id!==editId);save();closeEditor();render();toast("削除しました");
+  const delId=editId;
+  DATA=DATA.filter(t=>t.id!==delId);save();closeEditor();render();toast("削除しました");
+  pushAndRefresh({action:"delete",id:delId});
 });
 
 //======== トースト ========
@@ -600,6 +653,11 @@ function toast(msg){
 }
 
 render();
+if(API_URL){
+  const dm=document.querySelector(".demo");
+  if(dm)dm.innerHTML="✅ 全員で共有中（スプレッドシート連携）。変更は自動で全員に反映されます。";
+  syncFromServer();   // 起動時に最新データを取得
+}
 </script>
 </body>
 </html>
