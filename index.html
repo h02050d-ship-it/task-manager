@@ -461,6 +461,29 @@ function viewToday(){
       return rowHTML(o.t,whoPill(o.t)+`<span class="pill ${cls}"${style}>${o.label}・あと${o.d}日</span>`);
     }).join("")}</div>`;
   }
+
+  // 4) 全員の今後のやること（個人表示中のみ）：チーム全体の今後の月次・年次を近い順に
+  if(wfilter){
+    const allM=DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day>today)
+      .map(t=>({t,d:t.day-today,label:`毎月${t.day}日`}));
+    const allY=DATA.filter(t=>t.cat==="yearly"&&!isDoneCycle(t))
+      .map(t=>({t,d:daysUntilMD(t.mon,t.md)})).filter(o=>o.d>0)
+      .map(o=>({t:o.t,d:o.d,label:mdStr(o.t)}));
+    const all=[...allM,...allY].sort((a,b)=>a.d-b.d);
+    if(all.length){
+      const LIM=12, shown=all.slice(0,LIM);
+      h+=`<div class="sec-title">👥 全員の今後のやること（近い順） <span class="count">${all.length}</span></div>`;
+      h+=`<div class="card">${shown.map(o=>{
+        const c=colorOf(o.t.who);
+        const whoP=(o.t.who&&o.t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(o.t.who)}</span>`:"";
+        const soon=o.d<=ALERT_DAYS, mid=o.d<=31;
+        const style=(!soon&&mid)?' style="background:var(--soon-w);color:var(--soon)"':"";
+        const cls=soon?"due":(mid?"due":"ok");
+        return rowHTML(o.t,whoP+`<span class="pill ${cls}"${style}>${o.label}・あと${o.d}日</span>`);
+      }).join("")}</div>`;
+      if(all.length>LIM)h+=`<div class="demo" style="margin-top:8px">ほか${all.length-LIM}件（各タブで全件を確認できます）</div>`;
+    }
+  }
   return h;
 }
 function viewDaily(){
