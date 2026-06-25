@@ -445,6 +445,30 @@ function viewToday(){
     if(t.cat==="monthly")return whoPill(t)+`<span class="pill due">毎月${t.day}日</span>`;
     return whoPill(t)+`<span class="pill due">${mdStr(t)}・本日</span>`;});
 
+  // 2.5) チームの本日やること（個人表示中のみ）：他メンバーの本日分（日次＋本日が期日の月次・年次）
+  if(wfilter){
+    const isTodayTask=t=>t.cat==="daily"
+        ||(t.cat==="monthly"&&t.day===today)
+        ||(t.cat==="yearly"&&daysUntilMD(t.mon,t.md)===0);
+    const CATORD=["daily","factory","monthly","yearly"];
+    const teamDue=DATA.filter(t=>isTodayTask(t)&&t.who!==wfilter&&t.who&&t.who!=="—")
+      .sort((a,b)=>(WHOLIST.indexOf(a.who)-WHOLIST.indexOf(b.who))
+                 ||(CATORD.indexOf(a.cat)-CATORD.indexOf(b.cat)));
+    if(teamDue.length){
+      const remain=teamDue.filter(t=>!isDoneCycle(t)).length;
+      h+=`<div class="sec-title">👥 チームの本日やること <span class="count">残り${remain}/${teamDue.length}</span></div>`;
+      h+=`<div class="card">${teamDue.map(t=>{
+        const c=colorOf(t.who);
+        const whoP=`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(t.who)}</span>`;
+        let p="";
+        if(t.cat==="daily")p=t.time?`<span class="pill time">${esc(t.time)}</span>`:"";
+        else if(t.cat==="monthly")p=`<span class="pill due">毎月${t.day}日</span>`;
+        else if(t.cat==="yearly")p=`<span class="pill due">${mdStr(t)}・本日</span>`;
+        return rowHTML(t,whoP+p);
+      }).join("")}</div>`;
+    }
+  }
+
   // 3) 次に来るタスク（近い順）：これからの未完了の月次・年次
   const upM=byWho(DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day>today))
     .map(t=>({t,d:t.day-today,label:`毎月${t.day}日`}));
