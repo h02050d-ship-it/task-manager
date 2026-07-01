@@ -355,11 +355,13 @@ function normalizeServerTask(t){return {
   mon:(t.mon===""||t.mon==null)?undefined:Number(t.mon),
   md:(t.md===""||t.md==null)?undefined:Number(t.md),
   note:t.note||"",doneDate:t.doneDate?String(t.doneDate):""};}
+let synced=false;
 async function syncFromServer(){
   if(!API_URL)return;
   try{const r=await fetch(API_URL,{method:"GET"});const j=await r.json();
-    if(j&&j.ok&&Array.isArray(j.tasks)){DATA=j.tasks.map(normalizeServerTask);save();render();}
+    if(j&&j.ok&&Array.isArray(j.tasks)){DATA=j.tasks.map(normalizeServerTask);save();}
   }catch(e){}
+  synced=true;render();   // 取得失敗時（オフライン等）もローカル保存分で描画する
 }
 function apiPost(payload){
   if(!API_URL)return; if(SHARED_KEY)payload.key=SHARED_KEY;
@@ -423,16 +425,23 @@ function listCard(items,pillFn){
 function viewToday(){
   let h="";
   // 1) 未処理（期日超過）：完了していない & 期日が過ぎたもの
-  const overM=byWho(DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day<today))
+  //    ※誰の担当でもやらないといけないので、個人表示でもチーム全体の超過を一番上に出す
+  const overM=DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day<today)
     .map(t=>({t,over:today-t.day,label:`毎月${t.day}日`}));
-  const overY=byWho(DATA.filter(t=>t.cat==="yearly"&&!isDoneCycle(t)))
+  const overY=DATA.filter(t=>t.cat==="yearly"&&!isDoneCycle(t))
     .map(t=>({t,d:daysUntilMD(t.mon,t.md)})).filter(o=>o.d<0)
     .map(o=>({t:o.t,over:-o.d,label:mdStr(o.t)}));
-  const over=[...overM,...overY].sort((a,b)=>b.over-a.over);  // 超過日が長い順
+  const over=[...overM,...overY].sort((a,b)=>{   // 自分の担当を先頭に → 次に超過日が長い順
+    const am=(wfilter&&a.t.who===wfilter)?0:1, bm=(wfilter&&b.t.who===wfilter)?0:1;
+    return am-bm||b.over-a.over;
+  });
   if(over.length){  // 0件のときはセクションごと非表示
-    h+=`<div class="sec-title">🔴 未処理（期日超過） <span class="count">${over.length}</span></div>`;
-    h+=`<div class="card">${over.map(o=>rowHTML(o.t,
-        whoPill(o.t)+`<span class="pill over">${o.label}・${o.over}日超過</span>`)).join("")}</div>`;
+    h+=`<div class="sec-title">🔴 未処理（期日超過${wfilter?"・チーム全体":""}） <span class="count">${over.length}</span></div>`;
+    h+=`<div class="card">${over.map(o=>{
+      const c=colorOf(o.t.who);
+      const whoP=(o.t.who&&o.t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(o.t.who)}</span>`:"";
+      return rowHTML(o.t,whoP+`<span class="pill over">${o.label}・${o.over}日超過</span>`);
+    }).join("")}</div>`;
   }
 
   // 2) 本日やること：日次（毎日）＋ 本日が期日の月次・年次
@@ -699,12 +708,25 @@ function toast(msg){
   clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("on"),1600);
 }
 
-render();
 if(API_URL){
   const dm=document.querySelector(".demo");
   if(dm)dm.innerHTML="✅ 全員で共有中（スプレッドシート連携）。変更は自動で全員に反映されます。";
-  syncFromServer();   // 起動時に最新データを取得
+  // 起動時は古いキャッシュを描画しない＝「一瞬過去の内容が見えて戻る」対策。
+  // 先に読み込み表示を出し、サーバの最新データが来てから描画する。
+  document.getElementById("view").innerHTML='<div class="empty">読み込み中…</div>';
+  syncFromServer();                                // 取得後に描画（失敗時もローカル保存分で描画）
+  setTimeout(()=>{if(!synced)render();},4000);     // 電波が悪い時は4秒でローカル保存分を先に表示
+}else{
+  render();
 }
+// スマホでアプリに戻ってきた時（バックグラウンド復帰・キャッシュ復元）も最新化する
+function resync(){
+  const d=new Date();
+  if(d.getDate()!==today||d.getMonth()+1!==tmon||d.getFullYear()!==tyear){location.reload();return;} // 日付が変わっていたら作り直し
+  syncFromServer();
+}
+window.addEventListener("pageshow",e=>{if(e.persisted)resync();});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)resync();});
 </script>
 </body>
 </html>
