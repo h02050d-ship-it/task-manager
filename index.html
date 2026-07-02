@@ -424,6 +424,9 @@ function listCard(items,pillFn){
 //======== 各ビュー ========
 function viewToday(){
   let h="";
+  // 0) 🚨在庫アラート（在庫ボードが毎朝自動生成する「発注確認」タスク・id が reorder で始まる）
+  //    欠品＝販売機会損失なので、担当に関係なく全員のビューで未処理の最上段に出す
+  const alerts=DATA.filter(t=>String(t.id).indexOf("reorder")===0&&!isDoneCycle(t));
   // 1) 未処理（期日超過）：完了していない & 期日が過ぎたもの
   //    ※誰の担当でもやらないといけないので、個人表示でもチーム全体の超過を一番上に出す
   const overM=DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day<today)
@@ -435,9 +438,13 @@ function viewToday(){
     const am=(wfilter&&a.t.who===wfilter)?0:1, bm=(wfilter&&b.t.who===wfilter)?0:1;
     return am-bm||b.over-a.over;
   });
-  if(over.length){  // 0件のときはセクションごと非表示
-    h+=`<div class="sec-title">🔴 未処理（期日超過${wfilter?"・チーム全体":""}） <span class="count">${over.length}</span></div>`;
-    h+=`<div class="card">${over.map(o=>{
+  if(over.length||alerts.length){  // 0件のときはセクションごと非表示
+    h+=`<div class="sec-title">🔴 未処理（期日超過${wfilter?"・チーム全体":""}） <span class="count">${over.length+alerts.length}</span></div>`;
+    h+=`<div class="card">${alerts.map(t=>{
+      const c=colorOf(t.who);
+      const whoP=(t.who&&t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(t.who)}</span>`:"";
+      return rowHTML(t,whoP+`<span class="pill over">🚨在庫0・要発注</span>`);
+    }).join("")+over.map(o=>{
       const c=colorOf(o.t.who);
       const whoP=(o.t.who&&o.t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(o.t.who)}</span>`:"";
       return rowHTML(o.t,whoP+`<span class="pill over">${o.label}・${o.over}日超過</span>`);
