@@ -356,22 +356,42 @@ function normalizeServerTask(t){return {
   md:(t.md===""||t.md==null)?undefined:Number(t.md),
   note:t.note||"",doneDate:t.doneDate?String(t.doneDate):""};}
 let synced=false;
+// 未送信操作の退避キュー：POST失敗（電波不良・GAS一時エラー）でも変更を失わず、復帰後に自動再送する
+let PENDING=[];
+try{const p=localStorage.getItem("hz_pending_ops");if(p)PENDING=JSON.parse(p);}catch(e){}
+if(!Array.isArray(PENDING))PENDING=[];
+function savePending(){localStorage.setItem("hz_pending_ops",JSON.stringify(PENDING));}
+function queueOp(payload){PENDING.push(payload);savePending();}
+async function flushPending(){   // 先頭から順に再送（FIFO）。失敗したら中断し次回同期で再挑戦
+  while(PENDING.length){
+    try{await fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(PENDING[0])});}
+    catch(e){return;}
+    PENDING.shift();savePending();
+  }
+}
 async function syncFromServer(){
   if(!API_URL)return;
-  try{const r=await fetch(API_URL,{method:"GET"});const j=await r.json();
-    if(j&&j.ok&&Array.isArray(j.tasks)){DATA=j.tasks.map(normalizeServerTask);save();}
+  try{
+    await flushPending();
+    if(PENDING.length){synced=true;render();return;}   // 未送信の変更が残る間はサーバー内容で上書きしない
+    const r=await fetch(API_URL,{method:"GET"});const j=await r.json();
+    if(j&&j.ok&&Array.isArray(j.tasks)&&!PENDING.length){DATA=j.tasks.map(normalizeServerTask);save();}
   }catch(e){}
   synced=true;render();   // 取得失敗時（オフライン等）もローカル保存分で描画する
 }
 function apiPost(payload){
   if(!API_URL)return; if(SHARED_KEY)payload.key=SHARED_KEY;
-  fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)}).catch(()=>{});
+  if(PENDING.length){queueOp(payload);return;}   // 先に未送信があれば順序維持のため後ろに並べる
+  fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)})
+    .catch(()=>{queueOp(payload);toast("送信できませんでした。電波復帰後に自動再送します");});
 }
 async function pushAndRefresh(payload){
   if(!API_URL)return; if(SHARED_KEY)payload.key=SHARED_KEY;
+  await flushPending();
+  if(PENDING.length){queueOp(payload);toast("送信できませんでした。電波復帰後に自動再送します");return;}
   try{const r=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(payload)});
-    const j=await r.json(); if(j&&j.ok&&Array.isArray(j.tasks)){DATA=j.tasks.map(normalizeServerTask);save();render();}
-  }catch(e){}
+    const j=await r.json(); if(j&&j.ok&&Array.isArray(j.tasks)&&!PENDING.length){DATA=j.tasks.map(normalizeServerTask);save();render();}
+  }catch(e){queueOp(payload);toast("送信できませんでした。電波復帰後に自動再送します");}
 }
 
 //======== 日付 ========
@@ -426,7 +446,7 @@ function viewToday(){
   let h="";
   // 0) 🚨在庫アラート（在庫ボードが毎朝自動生成する「発注確認」タスク・id が reorder で始まる）
   //    欠品＝販売機会損失なので、担当に関係なく全員のビューで未処理の最上段に出す
-  const alerts=DATA.filter(t=>String(t.id).indexOf("reorder")===0&&!isDoneCycle(t));
+  const alerts=DATA.filter(t=>(String(t.id).indexOf("reorder")===0||String(t.id).indexOf("fax")===0)&&!isDoneCycle(t));
   // 1) 未処理（期日超過）：完了していない & 期日が過ぎたもの
   //    ※誰の担当でもやらないといけないので、個人表示でもチーム全体の超過を一番上に出す
   const overM=DATA.filter(t=>t.cat==="monthly"&&!isDoneCycle(t)&&t.day<today)
@@ -443,7 +463,8 @@ function viewToday(){
     h+=`<div class="card">${alerts.map(t=>{
       const c=colorOf(t.who);
       const whoP=(t.who&&t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(t.who)}</span>`:"";
-      return rowHTML(t,whoP+`<span class="pill over">🚨在庫0・要発注</span>`);
+      const alabel=String(t.id).indexOf("fax")===0?"📠未処理FAX":"🚨在庫0・要発注";
+      return rowHTML(t,whoP+`<span class="pill over">${alabel}</span>`);
     }).join("")+over.map(o=>{
       const c=colorOf(o.t.who);
       const whoP=(o.t.who&&o.t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(o.t.who)}</span>`:"";
