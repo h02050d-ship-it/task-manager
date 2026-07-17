@@ -463,7 +463,7 @@ function viewToday(){
     h+=`<div class="card">${alerts.map(t=>{
       const c=colorOf(t.who);
       const whoP=(t.who&&t.who!=="—")?`<span class="pill" style="background:${c.bg};color:${c.fg}">${esc(t.who)}</span>`:"";
-      const alabel=String(t.id).indexOf("fax")===0?"📠未処理FAX":String(t.id).indexOf("seinoship")===0?"📢発送通知・未処理":"🚨在庫0・要発注";
+      const alabel=String(t.id).indexOf("fax")===0?"📠未処理FAX":String(t.id).indexOf("seinoship")===0?"📢発送処理・未処理":"🚨在庫0・要発注";
       return rowHTML(t,whoP+`<span class="pill over">${alabel}</span>`);
     }).join("")+over.map(o=>{
       const c=colorOf(o.t.who);
