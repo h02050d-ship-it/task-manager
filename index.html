@@ -9,6 +9,10 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2">
 <link rel="manifest" href="manifest.json?v=2">
 <meta name="theme-color" content="#c2185b">
+<!-- 起動高速化：GASへの接続（DNS/TLS）を先に張っておく -->
+<link rel="preconnect" href="https://script.google.com" crossorigin>
+<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
+<link rel="dns-prefetch" href="https://script.google.com">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="タスク管理">
@@ -739,11 +743,10 @@ function toast(msg){
 if(API_URL){
   const dm=document.querySelector(".demo");
   if(dm)dm.innerHTML="✅ 全員で共有中（スプレッドシート連携）。変更は自動で全員に反映されます。";
-  // 起動時は古いキャッシュを描画しない＝「一瞬過去の内容が見えて戻る」対策。
-  // 先に読み込み表示を出し、サーバの最新データが来てから描画する。
-  document.getElementById("view").innerHTML='<div class="empty">読み込み中…</div>';
-  syncFromServer();                                // 取得後に描画（失敗時もローカル保存分で描画）
-  setTimeout(()=>{if(!synced)render();},4000);     // 電波が悪い時は4秒でローカル保存分を先に表示
+  // 起動高速化：前回保存分（localStorage）でまず即描画し、サーバ同期は裏で走らせる。
+  // 取得成功時は syncFromServer() 内の render() で最新内容に差し替わる。
+  render();
+  syncFromServer();
 }else{
   render();
 }
