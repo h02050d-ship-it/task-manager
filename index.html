@@ -323,6 +323,61 @@ const SEED=[
 const API_URL    = "https://script.google.com/macros/s/AKfycby6RTCYRAmBoGa0P4QDAb0mx_NeXARoHVncQtxp2X5IXUEYW86Jy2ECS9YPqhHFvzoZ/exec";   // GASウェブアプリ（スプレッドシート連携）
 const SHARED_KEY = "";   // GAS側でSHARED_KEYを設定した時だけ同じ値を入れる
 
+//======== 共通ログイン（2026-10-21 システムドック10/14承認①）========
+// GAS側でタスク一覧・済/追加/編集/削除に共通パスが必須になった。他の社内ツールと同じメール＋パスワード。
+// ・この端末で他の社内ツールにログイン済みなら自動で使う（入力不要）
+// ・GAS宛の呼び出しには保存済みのパスを1か所で付ける（個々の呼び出し・未送信キューは変えない）
+const HZ_SSO_KEY="hayazai_sso_cred";
+const HZ_SSO_PEERS=["notify_creds_v1","hayazai_board_cred","hayazai_seiso_cred","hayazai_rulebook_cred","hayazai_kaizen_cred","seinodesk_cred","faxdesk_cred","orderdesk_cred","nippou_cred"];
+function hzCred(){ for(const k of [HZ_SSO_KEY].concat(HZ_SSO_PEERS)){ try{ const v=JSON.parse(localStorage.getItem(k)||"null"); if(v){ const e=v.email||v.e, p=v.pass||v.p; if(e&&p) return {email:String(e),pass:String(p)}; } }catch(e){} } return null; }
+function hzSaveCred(email,pass){ try{ localStorage.setItem(HZ_SSO_KEY, JSON.stringify({email:email,pass:pass})); }catch(e){} }
+function hzClearCred(){ try{ localStorage.removeItem(HZ_SSO_KEY); }catch(e){} }
+(function(){ const _f=window.fetch.bind(window); window.fetch=function(u,o){ try{ if(typeof u==="string" && u.indexOf(API_URL)===0){ const c=hzCred(); if(c){
+  if(o && o.method==="POST" && typeof o.body==="string"){ const b=JSON.parse(o.body); if(b && !b.pass){ b.pass=c.pass; o=Object.assign({},o,{body:JSON.stringify(b)}); } }
+  else if(!/[?&]pass=/.test(u)) u+=(u.indexOf("?")<0?"?":"&")+"pass="+encodeURIComponent(c.pass);
+} } }catch(e){} return _f(u,o); }; })();
+async function hzVerify(cred){ try{ const r=await fetch(API_URL+"?action=authCheck&pass="+encodeURIComponent(cred.pass),{cache:"no-store"}); const j=await r.json(); return !!(j&&j.ok); }catch(e){ return null; } }
+function hzShowGate(err){
+  let g=document.getElementById("hzGate");
+  if(!g){
+    g=document.createElement("div"); g.id="hzGate";
+    g.setAttribute("style","position:fixed;inset:0;z-index:2147483000;background:#f4f6f8;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#1a1a1a");
+    g.innerHTML='<form id="hzGateForm" style="background:#fff;border:1px solid #d9dee3;border-radius:12px;padding:28px 26px;width:min(360px,92vw);box-shadow:0 8px 30px rgba(0,0,0,.08)">'
+      +'<div style="font-size:18px;font-weight:700;margin-bottom:4px">林材木店 社内ツール ログイン</div>'
+      +'<div style="font-size:12px;color:#667;margin-bottom:16px">他の社内ツールと同じメールアドレスとパスワードです。この端末では次回から自動で入ります。</div>'
+      +'<label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px">メールアドレス</label>'
+      +'<input id="hzGateMail" type="email" autocomplete="username" required style="width:100%;font-size:16px;padding:10px;border:1px solid #c9d0d6;border-radius:8px;margin-bottom:12px;box-sizing:border-box">'
+      +'<label style="display:block;font-size:12px;font-weight:700;margin-bottom:4px">パスワード</label>'
+      +'<input id="hzGatePass" type="password" autocomplete="current-password" required style="width:100%;font-size:16px;padding:10px;border:1px solid #c9d0d6;border-radius:8px;margin-bottom:14px;box-sizing:border-box">'
+      +'<button type="submit" id="hzGateBtn" style="width:100%;font-size:16px;font-weight:700;padding:11px;border:0;border-radius:8px;background:#2f6f4f;color:#fff;cursor:pointer">ログイン</button>'
+      +'<div id="hzGateErr" style="color:#c0392b;font-size:12px;font-weight:700;min-height:18px;margin-top:10px"></div>'
+      +'</form>';
+    document.body.appendChild(g);
+    document.getElementById("hzGateForm").addEventListener("submit", async function(ev){
+      ev.preventDefault();
+      const email=document.getElementById("hzGateMail").value.trim(), pass=document.getElementById("hzGatePass").value;
+      const btn=document.getElementById("hzGateBtn"), er=document.getElementById("hzGateErr");
+      if(!email||!pass){ er.textContent="メールとパスワードを入力してください"; return; }
+      btn.disabled=true; btn.textContent="確認中…"; er.textContent="";
+      const ok=await hzVerify({email:email,pass:pass});
+      if(ok===true){ hzSaveCred(email,pass); btn.textContent="OK 読み込み中…"; location.reload(); return; }
+      btn.disabled=false; btn.textContent="ログイン";
+      er.textContent = (ok===false) ? "メールまたはパスワードが違います" : "通信エラー。少し待ってもう一度お試しください";
+    });
+  }
+  document.getElementById("hzGateErr").textContent=err||"";
+  g.style.display="flex";
+  setTimeout(function(){ try{ document.getElementById("hzGateMail").focus(); }catch(e){} },60);
+}
+(function hzBoot(){
+  const run=function(){
+    const c=hzCred();
+    if(!c){ hzShowGate(""); return; }
+    hzVerify(c).then(function(ok){ if(ok===false){ hzClearCred(); hzShowGate("保存されていたログインが無効です。もう一度入力してください"); } });
+  };
+  if(document.body) run(); else document.addEventListener("DOMContentLoaded", run);
+})();
+
 //======== 状態 ========
 let DATA=load();
 let tab="today", wfilter=(localStorage.getItem("hz_me")||"大樹"), editId=null, editCat="daily", editWho="大樹";
